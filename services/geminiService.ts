@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import { BlueprintSection, SpotlightSuggestion } from '../types';
 
@@ -55,8 +54,8 @@ export const generateBacklogTitles = async (brainDump: string, docs: { name: str
     const context = getContext(brainDump, docs);
     const prompt = `Based on the context and the following sections, generate descriptive backlog item titles for each section.
     These titles should represent specific tasks or user stories.
-    Your response must not contain any placeholders.
-    Context:\n${context}\n\nSECTIONS:\n${sections.join(', ')}`;
+    Your response must not contain any placeholders and should match the requested JSON schema exactly.
+    Context:\n${context}\n\nSECTIONS:\n- ${sections.join('\n- ')}`;
     
     const response = await ai.models.generateContent({
       model,
@@ -67,30 +66,51 @@ export const generateBacklogTitles = async (brainDump: string, docs: { name: str
           type: Type.OBJECT,
           properties: {
             backlog: {
-              type: Type.OBJECT,
-              properties: sections.reduce((acc, section) => {
-                acc[section] = {
-                  type: Type.ARRAY,
-                  items: { type: Type.STRING },
-                  description: `Backlog titles for the '${section}' section.`
-                };
-                return acc;
-              }, {} as Record<string, any>)
+              type: Type.ARRAY,
+              description: "An array of objects, each representing a section and its backlog titles.",
+              items: {
+                type: Type.OBJECT,
+                properties: {
+                  section: { 
+                    type: Type.STRING,
+                    description: "The original section title."
+                  },
+                  titles: {
+                    type: Type.ARRAY,
+                    items: { type: Type.STRING },
+                    description: "An array of backlog titles for this section."
+                  }
+                },
+                required: ["section", "titles"]
+              }
             }
           }
         },
-        systemInstruction: "You are a product manager AI. Your task is to create backlog item titles without any placeholders."
+        systemInstruction: "You are a product manager AI. Your task is to create backlog item titles without any placeholders, strictly following the provided JSON schema."
       },
     });
 
     const jsonResponse = JSON.parse(response.text);
-    return jsonResponse.backlog || {};
+    const backlogArray: { section: string, titles: string[] }[] = jsonResponse.backlog || [];
+    
+    const backlogMap = backlogArray.reduce((acc, item) => {
+        const originalSection = sections.find(s => s.toLowerCase() === item.section.toLowerCase()) || item.section;
+        acc[originalSection] = item.titles;
+        return acc;
+    }, {} as Record<string, string[]>);
+    
+    for (const section of sections) {
+        if (!backlogMap[section]) {
+            backlogMap[section] = [];
+        }
+    }
+
+    return backlogMap;
   } catch (error) {
     console.error("Error generating backlog titles:", error);
     throw new Error("Failed to generate backlog titles.");
   }
 };
-
 
 export const generateBacklogDetails = async (brainDump: string, docs: { name: string, content: string }[], sectionWithTitles: { title: string, backlog: { id: string, title: string }[] }): Promise<Record<string, string>> => {
     try {
@@ -98,8 +118,8 @@ export const generateBacklogDetails = async (brainDump: string, docs: { name: st
         const titles = sectionWithTitles.backlog.map(b => b.title);
         const prompt = `For the section "${sectionWithTitles.title}", generate a detailed description for each of the following backlog items.
         Each description should be a concise paragraph (2-4 sentences) outlining the task, its goal, and acceptance criteria.
-        Your response must not contain any placeholders.
-        Context:\n${context}\n\nBACKLOG TITLES:\n${titles.join('\n- ')}`;
+        Your response must not contain any placeholders and match the requested JSON schema exactly.
+        Context:\n${context}\n\nBACKLOG TITLES TO DETAIL:\n- ${titles.join('\n- ')}`;
 
         const response = await ai.models.generateContent({
             model,
@@ -110,22 +130,37 @@ export const generateBacklogDetails = async (brainDump: string, docs: { name: st
                     type: Type.OBJECT,
                     properties: {
                         details: {
-                            type: Type.OBJECT,
-                            properties: titles.reduce((acc, title) => {
-                                acc[title] = {
-                                    type: Type.STRING,
-                                    description: `Detailed description for the backlog item: '${title}'.`
-                                };
-                                return acc;
-                            }, {} as Record<string, any>)
+                            type: Type.ARRAY,
+                            description: "An array of objects, each containing a backlog title and its detailed description.",
+                            items: {
+                                type: Type.OBJECT,
+                                properties: {
+                                    title: { 
+                                        type: Type.STRING,
+                                        description: "The original backlog item title."
+                                    },
+                                    detail: {
+                                        type: Type.STRING,
+                                        description: "The detailed description for the backlog item."
+                                    }
+                                },
+                                required: ["title", "detail"]
+                            }
                         }
                     }
                 },
-                systemInstruction: "You are a senior software engineer AI. Your task is to write detailed, placeholder-free specifications for backlog items."
+                systemInstruction: "You are a senior software engineer AI. Your task is to write detailed, placeholder-free specifications for backlog items, strictly following the provided JSON schema."
             },
         });
         const jsonResponse = JSON.parse(response.text);
-        return jsonResponse.details || {};
+        const detailsArray: { title: string, detail: string }[] = jsonResponse.details || [];
+    
+        const detailsMap = detailsArray.reduce((acc, item) => {
+            acc[item.title] = item.detail;
+            return acc;
+        }, {} as Record<string, string>);
+
+        return detailsMap;
     } catch (error) {
         console.error(`Error generating details for section "${sectionWithTitles.title}":`, error);
         throw new Error(`Failed to generate details for section "${sectionWithTitles.title}".`);
